@@ -119,10 +119,11 @@ class PreviewRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
     exaggeration: float = Field(default=0.5, ge=0, le=1)
     cfg_weight: float = Field(default=0.5, ge=0, le=1)
+    voice_id: str | None = None
 
 _model: Any = None
 
-def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float):
+def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, voice_id: str | None = None):
     global _model
     try:
         import torch
@@ -132,13 +133,16 @@ def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float):
         raise HTTPException(503, "Install CUDA PyTorch, torchaudio and chatterbox-tts to enable narration") from exc
     if _model is None:
         _model = ChatterboxTTS.from_pretrained(device="cuda" if torch.cuda.is_available() else "cpu")
-    audio = _model.generate(text, exaggeration=exaggeration, cfg_weight=cfg_weight)
+    kwargs = {"exaggeration": exaggeration, "cfg_weight": cfg_weight}
+    if voice_id:
+        kwargs["audio_prompt_path"] = voice_library.reference_path(voice_id)
+    audio = _model.generate(text, **kwargs)
     torchaudio.save(str(output), audio.cpu(), _model.sr)
 
 @app.post("/previews")
 def preview(req: PreviewRequest):
     path = STORE / f"preview-{uuid.uuid4().hex}.wav"
-    synthesize(req.text, path, req.exaggeration, req.cfg_weight)
+    synthesize(req.text, path, req.exaggeration, req.cfg_weight, req.voice_id)
     return FileResponse(path, media_type="audio/wav", filename="book2vox-preview.wav")
 
 class AnalyseRequest(BaseModel):
@@ -219,3 +223,21 @@ def list_book_jobs(book_id: str):
     book_path(book_id)
     with job_queue.connect() as db:
         return [dict(row) for row in db.execute("SELECT * FROM jobs WHERE book_id=? ORDER BY created_at DESC", (book_id,)).fetchall()]
+
+from . import voices as voice_library
+
+@app.get("/voices")
+def list_saved_voices():
+    return voice_library.list_voices()
+
+@app.post("/voices", status_code=201)
+async def add_voice(name: str = Form(...), consent: bool = Form(...), file: UploadFile = File(...)):
+    return await voice_library.create(name, consent, file)
+
+@app.get("/voices/{voice_id}/sample")
+def play_voice_sample(voice_id: str):
+    return voice_library.sample(voice_id)
+
+@app.delete("/voices/{voice_id}")
+def delete_saved_voice(voice_id: str):
+    return voice_library.remove(voice_id)
