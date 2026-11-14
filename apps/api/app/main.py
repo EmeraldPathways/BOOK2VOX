@@ -186,3 +186,36 @@ def chapter_audio(book_id: str, index: int):
     if not path.exists():
         raise HTTPException(404, "Audio not generated")
     return FileResponse(path, media_type="audio/wav", filename=f"chapter-{index}.wav")
+
+# Persistent, single-GPU background generation queue.
+from . import jobs as job_queue
+
+@app.on_event("startup")
+def start_generation_worker():
+    job_queue.init()
+
+@app.post("/jobs", status_code=202)
+def create_job(request: job_queue.JobRequest):
+    return job_queue.create(request)
+
+@app.get("/jobs/{job_id}")
+def get_generation_job(job_id: str):
+    return job_queue.get_job(job_id)
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_generation_job(job_id: str):
+    return job_queue.cancel(job_id)
+
+@app.post("/jobs/{job_id}/retry")
+def retry_generation_job(job_id: str):
+    return job_queue.retry(job_id)
+
+@app.get("/jobs/{job_id}/audio")
+def download_generated_audio(job_id: str):
+    return FileResponse(job_queue.audio_path(job_id), media_type="audio/mpeg", filename="book2vox-chapter.mp3")
+
+@app.get("/books/{book_id}/jobs")
+def list_book_jobs(book_id: str):
+    book_path(book_id)
+    with job_queue.connect() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM jobs WHERE book_id=? ORDER BY created_at DESC", (book_id,)).fetchall()]
