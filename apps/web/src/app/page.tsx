@@ -4,7 +4,8 @@ const API = "http://127.0.0.1:8000";
 type Book = {id:string;title:string;chapters:{index:number;title:string;characters:number}[]};
 export default function Home() {
  const [books,setBooks]=useState<Book[]>([]), [selected,setSelected]=useState<Book|null>(null),[index,setIndex]=useState(0);
- const [job,setJob]=useState<{id:string;status:string;completed:number;total:number;error:string|null}|null>(null);\n const [text,setText]=useState("She opened the door slowly. Something was waiting in the darkness."),[emotion,setEmotion]=useState(0.6),[status,setStatus]=useState(""),[audio,setAudio]=useState(""),[guidance,setGuidance]=useState("");
+ const [job,setJob]=useState<{id:string;status:string;completed:number;total:number;error:string|null}|null>(null);
+ const [text,setText]=useState("She opened the door slowly. Something was waiting in the darkness."),[emotion,setEmotion]=useState(0.6),[status,setStatus]=useState(""),[audio,setAudio]=useState(""),[guidance,setGuidance]=useState("");
  async function refresh(){try{const r=await fetch(API+"/books");if(r.ok)setBooks(await r.json());}catch{setStatus("Start the local FastAPI server on port 8000.")}}
  useEffect(()=>{refresh()},[]);
  useEffect(()=>{if(!job || !["queued","running"].includes(job.status))return;const timer=setInterval(async()=>{try{const r=await fetch(API+"/jobs/"+job.id);if(r.ok){const next=await r.json();setJob(next);if(next.status==="completed"){setAudio(API+"/jobs/"+next.id+"/audio");setStatus("Full chapter MP3 ready.");}else if(next.status==="failed"){setStatus("Generation failed: "+next.error)}}}catch{}},2500);return()=>clearInterval(timer)},[job?.id,job?.status]);
