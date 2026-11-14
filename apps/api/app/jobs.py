@@ -36,6 +36,9 @@ def init():
             exaggeration REAL NOT NULL, cfg_weight REAL NOT NULL,
             created_at REAL NOT NULL, updated_at REAL NOT NULL
         )""")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+        if "voice_id" not in columns:
+            db.execute("ALTER TABLE jobs ADD COLUMN voice_id TEXT")
         db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
     WAKE.set()
     threading.Thread(target=run_worker, daemon=True, name="book2vox-gpu-worker").start()
@@ -69,6 +72,7 @@ class JobRequest(BaseModel):
     chapter: int = Field(ge=0)
     exaggeration: float = Field(default=0.5, ge=0, le=1)
     cfg_weight: float = Field(default=0.5, ge=0, le=1)
+    voice_id: str | None = None
 
 def get_job(job_id: str):
     with connect() as db:
@@ -82,14 +86,17 @@ def create(req: JobRequest):
     chapters = json.loads((path / "chapters.json").read_text(encoding="utf-8"))
     if req.chapter >= len(chapters):
         raise HTTPException(404, "Chapter not found")
+    if req.voice_id:
+        from .voices import reference_path
+        reference_path(req.voice_id)
     total = len(segment(chapters[req.chapter]["text"]))
     if not total:
         raise HTTPException(422, "Chapter is empty")
     job_id = uuid.uuid4().hex
     now = time.time()
     with connect() as db:
-        db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (job_id, req.book_id, req.chapter, "queued", 0, total, None, req.exaggeration, req.cfg_weight, now, now))
+        db.execute("INSERT INTO jobs (id,book_id,chapter,status,completed,total,error,exaggeration,cfg_weight,created_at,updated_at,voice_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (job_id, req.book_id, req.chapter, "queued", 0, total, None, req.exaggeration, req.cfg_weight, now, now, req.voice_id))
     WAKE.set()
     return get_job(job_id)
 
@@ -143,7 +150,7 @@ def process(job):
         if not target.exists():
             tmp = folder / f"{index:05}.tmp.wav"
             with GPU_LOCK:
-                core.synthesize(text, tmp, job["exaggeration"], job["cfg_weight"])
+                core.synthesize(text, tmp, job["exaggeration"], job["cfg_weight"], job.get("voice_id"))
             tmp.replace(target)
         with connect() as db:
             db.execute("UPDATE jobs SET completed=?, updated_at=? WHERE id=? AND status='running'",
