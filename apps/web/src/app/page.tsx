@@ -37,7 +37,7 @@ export default function Home() {
  <select aria-label="Select narrator" value={voiceId} onChange={e=>setVoiceId(e.target.value)} style={{width:"100%",padding:10,background:"#26382e",color:"white",borderRadius:7}}>
  <option value="">Default Chatterbox narrator</option>{voices.map(v=><option key={v.id} value={v.id}>{v.name} ({v.sample_seconds}s)</option>)}</select>
  {voiceId&&<div style={{display:"flex",gap:8,alignItems:"center",marginTop:10}}><audio controls src={API+"/voices/"+voiceId+"/sample"} style={{width:"75%",height:38}}/><button onClick={deleteVoice} style={{...button,background:"#713b39",color:"white"}}>Delete</button></div>}
- <p style={{fontSize:13,color:"#b0beb6"}}>Add a clean voice recording (3–180 seconds). Only use voices you own or have permission to clone.</p>
+ <p style={{fontSize:13,color:"#b0beb6"}}>Add a clean voice recording; the source can be longer than the selected passage. Only use voices you own or have permission to clone.</p>
  <input aria-label="Voice profile name" placeholder="Voice name" value={voiceName} onChange={e=>setVoiceName(e.target.value)} maxLength={80} style={{width:"100%",boxSizing:"border-box",padding:9,marginBottom:9,background:"#26382e",color:"white",border:"1px solid #52665a",borderRadius:7}}/>
  <input aria-label="Reference voice audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg" onChange={e=>{setVoiceFile(e.target.files?.[0]||null);setVoiceStart(0);setVoiceEnd(30)}} style={{width:"100%"}}/>
  <AudioRangeEditor file={voiceFile} startSeconds={voiceStart} endSeconds={voiceEnd} onChange={(start,end)=>{setVoiceStart(start);setVoiceEnd(end)}}/>

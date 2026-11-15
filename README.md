@@ -39,7 +39,7 @@ For a deployed frontend, copy `apps/web/.env.example` to `.env.local` for local 
 
 ## Voice profiles
 
-Choose an MP3, WAV, M4A, FLAC, or OGG recording, then use the waveform and start/end sliders to select a clean 3–30 second passage. Preview the selection before saving. The uploaded source recording remains in the local voice folder for later re-editing; `reference.wav` is the derived mono 24 kHz clip passed to Chatterbox.
+Choose an MP3, WAV, M4A, FLAC, or OGG recording up to 30 MB, then use the waveform and start/end sliders to select a clean 3–30 second passage. Preview the selection before saving. The uploaded source recording remains in the local voice folder for later re-editing; `reference.wav` is the derived mono 24 kHz clip passed to Chatterbox.
 
 ## LM Studio
 Enable LM Studio's local API server on http://127.0.0.1:1234 and load an instruct model. For an RTX 3060, start with the current Qwen3 8B Instruct GGUF in Q4_K_M quantization if it is available in the LM Studio catalog; use a Qwen2.5 3B Instruct Q4_K_M model if memory is tight. Use an 8k–16k context, temperature around 0.2, and keep responses short (about 256 tokens) because the endpoint only needs mood, pacing, pause, and dialogue-delivery guidance.

@@ -16,7 +16,7 @@ from .main import STORE
 
 VOICES = STORE / "voices"
 VOICES.mkdir(parents=True, exist_ok=True)
-MAX_BYTES = 15 * 1024 * 1024
+MAX_SOURCE_BYTES = 30 * 1024 * 1024
 
 def voice_dir(voice_id: str) -> Path:
     if not re.fullmatch(r"[a-f0-9]{32}", voice_id):
@@ -44,9 +44,9 @@ async def create(name: str, consent: bool, file: UploadFile, start_seconds: floa
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg"}:
         raise HTTPException(415, "Upload WAV, MP3, M4A, FLAC or OGG audio")
-    data = await file.read(MAX_BYTES + 1)
-    if len(data) > MAX_BYTES:
-        raise HTTPException(413, "Voice recording exceeds 15 MB")
+    data = await file.read(MAX_SOURCE_BYTES + 1)
+    if len(data) > MAX_SOURCE_BYTES:
+        raise HTTPException(413, "Source voice recording exceeds 30 MB")
     if not math.isfinite(start_seconds) or (end_seconds is not None and not math.isfinite(end_seconds)):
         raise HTTPException(422, "Voice selection times must be finite numbers")
     if start_seconds < 0 or (end_seconds is not None and end_seconds <= start_seconds):
@@ -65,8 +65,8 @@ async def create(name: str, consent: bool, file: UploadFile, start_seconds: floa
             capture_output=True, text=True, timeout=15, check=True,
         )
         duration = float(probe.stdout.strip())
-        if not 3 <= duration <= 180:
-            raise HTTPException(422, "Recording must be between 3 and 180 seconds")
+        if duration < 3:
+            raise HTTPException(422, "Recording must be at least 3 seconds")
         selection_start = float(start_seconds)
         selection_end = min(duration, selection_start + 30) if end_seconds is None else float(end_seconds)
         selection_duration = selection_end - selection_start
