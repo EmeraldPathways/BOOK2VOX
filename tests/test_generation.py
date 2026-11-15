@@ -48,8 +48,8 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_synthesize(text, output, exaggeration, cfg_weight, selected_voice_id=None):
-        calls.append((text, exaggeration, cfg_weight, selected_voice_id))
+    def fake_synthesize(text, output, exaggeration, cfg_weight, selected_voice_id=None, speed=1.0):
+        calls.append((text, exaggeration, cfg_weight, selected_voice_id, speed))
         with wave.open(str(output), "wb") as audio:
             audio.setnchannels(1)
             audio.setsampwidth(2)
@@ -58,7 +58,7 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
 
     monkeypatch.setattr(main, "synthesize", fake_synthesize)
 
-    jobs.process({"id": job_id, "book_id": book_id, "chapter": 0, "exaggeration": 0.8, "cfg_weight": 0.4, "voice_id": voice_id})
+    jobs.process({"id": job_id, "book_id": book_id, "chapter": 0, "exaggeration": 0.8, "cfg_weight": 0.4, "voice_id": voice_id, "speed": 1.15})
 
     job = jobs.get_job(job_id)
     output = book_dir / "jobs" / job_id / "chapter.mp3"
@@ -66,5 +66,23 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
     assert job["completed"] == len(parts)
     assert len(calls) == len(parts)
     assert all(call[3] == voice_id for call in calls)
+    assert all(call[4] == 1.15 for call in calls)
     assert output.is_file()
     assert output.stat().st_size > 0
+
+
+def test_job_request_persists_talking_speed(tmp_path, monkeypatch):
+    book_id = "d" * 32
+    book_dir = tmp_path / book_id
+    book_dir.mkdir()
+    (book_dir / "book.json").write_text(json.dumps({"title": "Test", "chapters": []}), encoding="utf-8")
+    (book_dir / "chapters.json").write_text(json.dumps([{"title": "Chapter 1", "text": "A queued chapter."}]), encoding="utf-8")
+    monkeypatch.setattr(main, "STORE", tmp_path)
+    monkeypatch.setattr(jobs, "run_worker", lambda: None)
+    jobs.init()
+
+    request = jobs.JobRequest(book_id=book_id, chapter=0, speed=1.15)
+    job = jobs.create(request)
+
+    assert request.speed == 1.15
+    assert job["speed"] == 1.15

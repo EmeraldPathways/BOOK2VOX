@@ -33,7 +33,7 @@ npm run dev
 ```
 Open http://localhost:3000. API runs at http://127.0.0.1:8000.
 
-The first Chatterbox synthesis downloads model weights. Full chapters run through the local background queue and export MP3 with FFmpeg. The API must remain running while a job is generating.
+The first Chatterbox synthesis downloads model weights. Full chapters run through the local background queue and export MP3 with FFmpeg. The API must remain running while a job is generating. The talking-speed control (0.75×–1.25×) is carried into previews, quick excerpts, and full-chapter jobs.
 
 For a deployed frontend, copy `apps/web/.env.example` to `.env.local` for local work or set `NEXT_PUBLIC_API_URL` in Vercel to the public HTTPS URL of a separately hosted FastAPI backend. Set the backend's `CORS_ORIGINS` to the Vercel origin. Vercel hosts the Next.js frontend only; Chatterbox, CUDA, FFmpeg, local storage, and the generation worker cannot run inside this Vercel deployment.
 

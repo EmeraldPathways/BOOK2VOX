@@ -39,11 +39,14 @@ def init():
             status TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0,
             total INTEGER NOT NULL DEFAULT 0, error TEXT,
             exaggeration REAL NOT NULL, cfg_weight REAL NOT NULL,
-            created_at REAL NOT NULL, updated_at REAL NOT NULL
+            created_at REAL NOT NULL, updated_at REAL NOT NULL,
+            speed REAL NOT NULL DEFAULT 1.0
         )""")
         columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
         if "voice_id" not in columns:
             db.execute("ALTER TABLE jobs ADD COLUMN voice_id TEXT")
+        if "speed" not in columns:
+            db.execute("ALTER TABLE jobs ADD COLUMN speed REAL NOT NULL DEFAULT 1.0")
         db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
     WAKE.set()
     threading.Thread(target=run_worker, daemon=True, name="book2vox-gpu-worker").start()
@@ -78,6 +81,7 @@ class JobRequest(BaseModel):
     exaggeration: float = Field(default=0.5, ge=0, le=1)
     cfg_weight: float = Field(default=0.5, ge=0, le=1)
     voice_id: str | None = None
+    speed: float = Field(default=1.0, ge=0.75, le=1.25)
 
 def get_job(job_id: str):
     with connect() as db:
@@ -100,8 +104,8 @@ def create(req: JobRequest):
     job_id = uuid.uuid4().hex
     now = time.time()
     with connect() as db:
-        db.execute("INSERT INTO jobs (id,book_id,chapter,status,completed,total,error,exaggeration,cfg_weight,created_at,updated_at,voice_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (job_id, req.book_id, req.chapter, "queued", 0, total, None, req.exaggeration, req.cfg_weight, now, now, req.voice_id))
+        db.execute("INSERT INTO jobs (id,book_id,chapter,status,completed,total,error,exaggeration,cfg_weight,created_at,updated_at,voice_id,speed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (job_id, req.book_id, req.chapter, "queued", 0, total, None, req.exaggeration, req.cfg_weight, now, now, req.voice_id, req.speed))
     WAKE.set()
     return get_job(job_id)
 
@@ -155,7 +159,7 @@ def process(job):
         if not target.exists():
             tmp = folder / f"{index:05}.tmp.wav"
             with GPU_LOCK:
-                _core().synthesize(text, tmp, job["exaggeration"], job["cfg_weight"], job.get("voice_id"))
+                _core().synthesize(text, tmp, job["exaggeration"], job["cfg_weight"], job.get("voice_id"), job.get("speed", 1.0))
             tmp.replace(target)
         with connect() as db:
             db.execute("UPDATE jobs SET completed=?, updated_at=? WHERE id=? AND status='running'",
