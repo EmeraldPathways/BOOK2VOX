@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { audioDuration, normalizeSelection } from "./audio-range";
 
 type AudioRangeEditorProps = {
   file: File | null;
@@ -9,8 +10,6 @@ type AudioRangeEditorProps = {
   onChange: (startSeconds: number, endSeconds: number) => void;
 };
 
-const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
-
 export default function AudioRangeEditor({ file, startSeconds, endSeconds, onChange }: AudioRangeEditorProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -18,9 +17,10 @@ export default function AudioRangeEditor({ file, startSeconds, endSeconds, onCha
   const [duration, setDuration] = useState(0);
   const [peaks, setPeaks] = useState<number[]>([]);
   const [previewing, setPreviewing] = useState(false);
-  const rangeReady = duration >= 3;
-  const safeStart = rangeReady ? clamp(startSeconds, 0, Math.max(0, duration - 3)) : 0;
-  const safeEnd = rangeReady ? clamp(endSeconds, Math.min(duration, safeStart + 3), Math.min(duration, safeStart + 30)) : 0;
+  const selection = normalizeSelection(duration, startSeconds, endSeconds);
+  const rangeReady = selection.ready;
+  const safeStart = selection.start;
+  const safeEnd = selection.end;
 
   useEffect(() => {
     if (!file) {
@@ -41,6 +41,7 @@ export default function AudioRangeEditor({ file, startSeconds, endSeconds, onCha
         try {
           const decoded = await context.decodeAudioData(buffer);
           if (cancelled) return;
+          setDuration(audioDuration(decoded));
           const channel = decoded.getChannelData(0);
           const bucketSize = Math.max(1, Math.floor(channel.length / 1200));
           const nextPeaks: number[] = [];
@@ -119,20 +120,17 @@ export default function AudioRangeEditor({ file, startSeconds, endSeconds, onCha
 
   useEffect(() => {
     if (!duration || !rangeReady) return;
-    const nextStart = clamp(startSeconds, 0, Math.max(0, duration - 3));
-    const nextEnd = clamp(endSeconds, Math.min(duration, nextStart + 3), Math.min(duration, nextStart + 30));
-    if (nextStart !== startSeconds || nextEnd !== endSeconds) onChange(nextStart, nextEnd);
+    if (selection.start !== startSeconds || selection.end !== endSeconds) onChange(selection.start, selection.end);
   }, [duration]);
 
   const changeStart = (value: number) => {
-    const nextStart = clamp(value, 0, Math.max(0, duration - 3));
-    const nextEnd = clamp(Math.max(safeEnd, nextStart + 3), nextStart + 3, Math.min(duration, nextStart + 30));
-    onChange(nextStart, nextEnd);
+    const next = normalizeSelection(duration, value, safeEnd);
+    onChange(next.start, next.end);
   };
 
   const changeEnd = (value: number) => {
-    const nextEnd = clamp(value, Math.min(duration, safeStart + 3), Math.min(duration, safeStart + 30));
-    onChange(safeStart, nextEnd);
+    const next = normalizeSelection(duration, safeStart, value);
+    onChange(next.start, next.end);
   };
 
   const previewSelection = () => {
@@ -149,6 +147,7 @@ export default function AudioRangeEditor({ file, startSeconds, endSeconds, onCha
         ref={audioRef}
         controls
         src={sourceUrl || undefined}
+        onLoadedMetadata={event => setDuration(audioDuration(event.currentTarget))}
         onPause={() => setPreviewing(false)}
         onTimeUpdate={event => {
           if (previewing && event.currentTarget.currentTime >= safeEnd) {
@@ -162,9 +161,9 @@ export default function AudioRangeEditor({ file, startSeconds, endSeconds, onCha
       <canvas ref={canvasRef} aria-label="Voice recording waveform" style={{ display: "block", width: "100%", height: 112, marginTop: 10, borderRadius: 6 }} />
       <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
         <label style={{ fontSize: 13 }}>Start: {safeStart.toFixed(1)}s</label>
-        <input aria-label="Voice selection start" type="range" min="0" max={Math.max(0, duration - 3)} step="0.1" value={safeStart} disabled={!rangeReady} onChange={event => changeStart(Number(event.target.value))} />
+        <input aria-label="Voice selection start" type="range" min="0" max={selection.startMax} step="0.1" value={safeStart} disabled={!rangeReady} onChange={event => changeStart(Number(event.target.value))} />
         <label style={{ fontSize: 13 }}>End: {safeEnd.toFixed(1)}s · selected {(safeEnd - safeStart).toFixed(1)}s</label>
-        <input aria-label="Voice selection end" type="range" min={Math.min(duration, safeStart + 3)} max={Math.min(duration, safeStart + 30)} step="0.1" value={safeEnd} disabled={!rangeReady} onChange={event => changeEnd(Number(event.target.value))} />
+        <input aria-label="Voice selection end" type="range" min={selection.endMin} max={selection.endMax} step="0.1" value={safeEnd} disabled={!rangeReady} onChange={event => changeEnd(Number(event.target.value))} />
       </div>
       {!file && <p style={{ fontSize: 13, color: "#9caea4", marginBottom: 0 }}>Choose an audio file to select a voice range.</p>}
       {file && !rangeReady && <p style={{ fontSize: 13, color: "#ffb2a5", marginBottom: 0 }}>The recording must be at least 3 seconds long.</p>}
