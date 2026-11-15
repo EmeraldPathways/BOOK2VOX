@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, epub
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -172,16 +172,18 @@ async def analyse(req: AnalyseRequest):
         raise HTTPException(503, f"LM Studio unavailable: {exc}") from exc
 
 @app.post("/books/{book_id}/chapters/{index}/generate")
-def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_weight: float = 0.5):
+def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_weight: float = 0.5, voice_id: str | None = None):
     chapters = json.loads((book_path(book_id) / "chapters.json").read_text(encoding="utf-8"))
     if index < 0 or index >= len(chapters):
         raise HTTPException(404, "Chapter not found")
     if not (0 <= exaggeration <= 1 and 0 <= cfg_weight <= 1):
         raise HTTPException(422, "Controls must be between 0 and 1")
-    # Intentionally limited for the first prototype; segmentation and job queue are next.
+    if voice_id:
+        voice_library.reference_path(voice_id)
+    # Keep this synchronous route as a limited preview; full chapters use /jobs.
     text = chapters[index]["text"][:1200]
     output = book_path(book_id) / f"chapter-{index}.wav"
-    synthesize(text, output, exaggeration, cfg_weight)
+    synthesize(text, output, exaggeration, cfg_weight, voice_id)
     return {"chapter": index, "generated_characters": len(text), "partial": len(chapters[index]["text"]) > 1200, "audio_url": f"/books/{book_id}/chapters/{index}/audio"}
 
 @app.get("/books/{book_id}/chapters/{index}/audio")

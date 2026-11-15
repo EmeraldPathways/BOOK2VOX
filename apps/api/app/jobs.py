@@ -15,14 +15,19 @@ from pathlib import Path
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from . import main as core
-
-DB = core.STORE / "jobs.sqlite3"
 WAKE = threading.Event()
 GPU_LOCK = threading.Lock()
 
+
+def _core():
+    """Load the API module only after both modules can finish importing."""
+    from . import main
+
+    return main
+
+
 def connect():
-    db = sqlite3.connect(DB, timeout=30)
+    db = sqlite3.connect(_core().STORE / "jobs.sqlite3", timeout=30)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     return db
@@ -82,7 +87,7 @@ def get_job(job_id: str):
     return dict(row)
 
 def create(req: JobRequest):
-    path = core.book_path(req.book_id)
+    path = _core().book_path(req.book_id)
     chapters = json.loads((path / "chapters.json").read_text(encoding="utf-8"))
     if req.chapter >= len(chapters):
         raise HTTPException(404, "Chapter not found")
@@ -138,7 +143,7 @@ def run_worker():
             time.sleep(2)
 
 def process(job):
-    book_dir = core.book_path(job["book_id"])
+    book_dir = _core().book_path(job["book_id"])
     chapters = json.loads((book_dir / "chapters.json").read_text(encoding="utf-8"))
     parts = segment(chapters[job["chapter"]]["text"])
     folder = book_dir / "jobs" / job["id"]
@@ -150,7 +155,7 @@ def process(job):
         if not target.exists():
             tmp = folder / f"{index:05}.tmp.wav"
             with GPU_LOCK:
-                core.synthesize(text, tmp, job["exaggeration"], job["cfg_weight"], job.get("voice_id"))
+                _core().synthesize(text, tmp, job["exaggeration"], job["cfg_weight"], job.get("voice_id"))
             tmp.replace(target)
         with connect() as db:
             db.execute("UPDATE jobs SET completed=?, updated_at=? WHERE id=? AND status='running'",
@@ -175,7 +180,7 @@ def audio_path(job_id: str) -> Path:
     job = get_job(job_id)
     if job["status"] != "completed":
         raise HTTPException(409, "Audio is not ready")
-    path = core.book_path(job["book_id"]) / "jobs" / job_id / "chapter.mp3"
+    path = _core().book_path(job["book_id"]) / "jobs" / job_id / "chapter.mp3"
     if not path.exists():
         raise HTTPException(404, "Audio missing")
     return path
