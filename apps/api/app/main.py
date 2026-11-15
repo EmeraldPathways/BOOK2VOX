@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -201,11 +202,18 @@ class PreviewRequest(BaseModel):
     exaggeration: float = Field(default=0.5, ge=0, le=1)
     cfg_weight: float = Field(default=0.5, ge=0, le=1)
     voice_id: str | None = None
+    speed: float = Field(default=1.0, ge=0.75, le=1.25)
 
 _model: Any = None
 
-def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, voice_id: str | None = None):
+def _validate_speed(speed: float) -> float:
+    if not math.isfinite(speed) or not 0.75 <= speed <= 1.25:
+        raise HTTPException(422, "Talking speed must be between 0.75x and 1.25x")
+    return speed
+
+def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, voice_id: str | None = None, speed: float = 1.0):
     global _model
+    speed = _validate_speed(speed)
     try:
         import torch
         import torchaudio
@@ -218,12 +226,28 @@ def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, 
     if voice_id:
         kwargs["audio_prompt_path"] = voice_library.reference_path(voice_id)
     audio = _model.generate(text, **kwargs)
-    torchaudio.save(str(output), audio.cpu(), _model.sr)
+    if speed == 1.0:
+        torchaudio.save(str(output), audio.cpu(), _model.sr)
+        return
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(503, "FFmpeg must be installed to adjust talking speed")
+    source = output.with_name(f".{output.stem}-{uuid.uuid4().hex}.wav")
+    try:
+        torchaudio.save(str(source), audio.cpu(), _model.sr)
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+             "-filter:a", f"atempo={speed:.3f}", "-c:a", "pcm_s16le", str(output)],
+            capture_output=True, timeout=45, check=True,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise HTTPException(422, f"Unable to adjust talking speed: {exc}") from exc
+    finally:
+        source.unlink(missing_ok=True)
 
 @app.post("/previews")
 def preview(req: PreviewRequest):
     path = STORE / f"preview-{uuid.uuid4().hex}.wav"
-    synthesize(req.text, path, req.exaggeration, req.cfg_weight, req.voice_id)
+    synthesize(req.text, path, req.exaggeration, req.cfg_weight, req.voice_id, req.speed)
     return FileResponse(path, media_type="audio/wav", filename="book2vox-preview.wav")
 
 class AnalyseRequest(BaseModel):
@@ -253,18 +277,19 @@ async def analyse(req: AnalyseRequest):
         raise HTTPException(503, f"LM Studio unavailable: {exc}") from exc
 
 @app.post("/books/{book_id}/chapters/{index}/generate")
-def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_weight: float = 0.5, voice_id: str | None = None):
+def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_weight: float = 0.5, voice_id: str | None = None, speed: float = 1.0):
     chapters = json.loads((book_path(book_id) / "chapters.json").read_text(encoding="utf-8"))
     if index < 0 or index >= len(chapters):
         raise HTTPException(404, "Chapter not found")
     if not (0 <= exaggeration <= 1 and 0 <= cfg_weight <= 1):
         raise HTTPException(422, "Controls must be between 0 and 1")
+    _validate_speed(speed)
     if voice_id:
         voice_library.reference_path(voice_id)
     # Keep this synchronous route as a limited preview; full chapters use /jobs.
     text = chapters[index]["text"][:1200]
     output = book_path(book_id) / f"chapter-{index}.wav"
-    synthesize(text, output, exaggeration, cfg_weight, voice_id)
+    synthesize(text, output, exaggeration, cfg_weight, voice_id, speed)
     return {"chapter": index, "generated_characters": len(text), "partial": len(chapters[index]["text"]) > 1200, "audio_url": f"/books/{book_id}/chapters/{index}/audio"}
 
 @app.get("/books/{book_id}/chapters/{index}/audio")

@@ -21,11 +21,11 @@ def test_quick_chapter_passes_selected_voice_to_synthesis(tmp_path, monkeypatch)
 
     calls = []
 
-    def fake_synthesize(text, output, exaggeration, cfg_weight, selected_voice_id=None):
-        calls.append((text, exaggeration, cfg_weight, selected_voice_id))
+    def fake_synthesize(text, output, exaggeration, cfg_weight, selected_voice_id=None, speed=1.0):
+        calls.append((text, exaggeration, cfg_weight, selected_voice_id, speed))
 
     monkeypatch.setattr(main, "synthesize", fake_synthesize)
 
-    main.generate_chapter(book_id, 0, exaggeration=0.7, voice_id=voice_id)
+    main.generate_chapter(book_id, 0, exaggeration=0.7, voice_id=voice_id, speed=1.15)
 
-    assert calls == [("A short chapter.", 0.7, 0.5, voice_id)]
+    assert calls == [("A short chapter.", 0.7, 0.5, voice_id, 1.15)]
