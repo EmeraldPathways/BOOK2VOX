@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 import wave
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +18,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from . import jobs as job_queue
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    job_queue.init()
+    yield
+
+
 ROOT = Path(__file__).resolve().parents[3]
 STORE = ROOT / "storage"
 STORE.mkdir(exist_ok=True)
 MAX_UPLOAD = 30 * 1024 * 1024
-app = FastAPI(title="BOOK2VOX API", version="0.1.0")
+app = FastAPI(title="BOOK2VOX API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_methods=["*"], allow_headers=["*"])
 
 def book_path(book_id: str) -> Path:
@@ -192,13 +202,6 @@ def chapter_audio(book_id: str, index: int):
     if not path.exists():
         raise HTTPException(404, "Audio not generated")
     return FileResponse(path, media_type="audio/wav", filename=f"chapter-{index}.wav")
-
-# Persistent, single-GPU background generation queue.
-from . import jobs as job_queue
-
-@app.on_event("startup")
-def start_generation_worker():
-    job_queue.init()
 
 @app.post("/jobs", status_code=202)
 def create_job(request: job_queue.JobRequest):
