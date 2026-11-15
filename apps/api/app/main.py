@@ -4,6 +4,9 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
 import wave
 from contextlib import asynccontextmanager
@@ -32,7 +35,9 @@ STORE = ROOT / "storage"
 STORE.mkdir(exist_ok=True)
 MAX_UPLOAD = 30 * 1024 * 1024
 app = FastAPI(title="BOOK2VOX API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_methods=["*"], allow_headers=["*"])
+_default_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()] or _default_cors_origins
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["*"], allow_headers=["*"])
 
 def book_path(book_id: str) -> Path:
     if not re.fullmatch(r"[a-f0-9]{32}", book_id):
@@ -56,9 +61,75 @@ def split_text(text: str) -> list[dict]:
         out.append({"title": chunks[i].strip(), "text": chunks[i + 1].strip()})
     return [x for x in out if x["text"]]
 
+def _extract_docx(data: bytes) -> list[dict]:
+    from docx import Document
+
+    document = Document(io.BytesIO(data))
+    chapters: list[dict] = []
+    title = "Chapter 1"
+    paragraphs: list[str] = []
+
+    def flush() -> None:
+        text = "\n".join(paragraphs).strip()
+        if text:
+            chapters.append({"title": title, "text": text})
+
+    for paragraph in document.paragraphs:
+        value = paragraph.text.strip()
+        if not value:
+            continue
+        style = (paragraph.style.name or "").lower()
+        if style.startswith("heading"):
+            flush()
+            title = value
+            paragraphs = []
+        else:
+            paragraphs.append(value)
+    flush()
+    return chapters
+
+
+def _extract_mobi(data: bytes) -> list[dict]:
+    converter = shutil.which("ebook-convert")
+    if not converter:
+        raise HTTPException(503, "MOBI import requires Calibre's ebook-convert on PATH")
+    with tempfile.TemporaryDirectory(prefix="book2vox-mobi-") as directory:
+        source = Path(directory) / "book.mobi"
+        converted = Path(directory) / "book.epub"
+        source.write_bytes(data)
+        try:
+            subprocess.run(
+                [converter, str(source), str(converted)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(422, "MOBI conversion timed out; the file may be DRM-protected") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "conversion failed").strip().splitlines()[-1]
+            raise HTTPException(422, f"Unable to convert MOBI: {detail}") from exc
+        except OSError as exc:
+            raise HTTPException(503, f"Unable to run Calibre's ebook-convert: {exc}") from exc
+        if not converted.exists():
+            raise HTTPException(422, "Calibre did not produce an EPUB from this MOBI file")
+        try:
+            return extract(converted.read_bytes(), ".epub")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(422, f"Unable to read converted MOBI: {exc}") from exc
+
+
 def extract(data: bytes, suffix: str) -> list[dict]:
+    suffix = suffix.lower()
     if suffix == ".txt":
         return split_text(data.decode("utf-8-sig"))
+    if suffix == ".docx":
+        return _extract_docx(data)
+    if suffix == ".mobi":
+        return _extract_mobi(data)
     if suffix == ".epub":
         book = epub.read_epub(io.BytesIO(data))
         items = {item.id: item for item in book.get_items() if item.get_type() == ITEM_DOCUMENT}
@@ -80,7 +151,7 @@ def extract(data: bytes, suffix: str) -> list[dict]:
         doc = fitz.open(stream=data, filetype="pdf")
         text = "\n".join(page.get_text() for page in doc)
         return split_text(text)
-    raise HTTPException(400, "Supported formats: EPUB, TXT, PDF")
+    raise HTTPException(400, "Supported formats: EPUB, MOBI, DOCX, TXT or PDF")
 
 @app.get("/health")
 def health():
@@ -93,7 +164,7 @@ def books():
 @app.post("/books")
 async def upload_book(file: UploadFile = File(...)):
     suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in {".epub", ".txt", ".pdf"}:
+    if suffix not in {".epub", ".mobi", ".docx", ".txt", ".pdf"}:
         raise HTTPException(400, "Unsupported file type")
     data = await file.read(MAX_UPLOAD + 1)
     if len(data) > MAX_UPLOAD:
@@ -236,8 +307,14 @@ def list_saved_voices():
     return voice_library.list_voices()
 
 @app.post("/voices", status_code=201)
-async def add_voice(name: str = Form(...), consent: bool = Form(...), file: UploadFile = File(...)):
-    return await voice_library.create(name, consent, file)
+async def add_voice(
+    name: str = Form(...),
+    consent: bool = Form(...),
+    start_seconds: float = Form(0),
+    end_seconds: float | None = Form(None),
+    file: UploadFile = File(...),
+):
+    return await voice_library.create(name, consent, file, start_seconds, end_seconds)
 
 @app.get("/voices/{voice_id}/sample")
 def play_voice_sample(voice_id: str):
