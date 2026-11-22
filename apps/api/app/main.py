@@ -211,6 +211,18 @@ def _validate_speed(speed: float) -> float:
         raise HTTPException(422, "Talking speed must be between 0.75x and 1.25x")
     return speed
 
+def export_mp3(source: Path, output: Path):
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(503, "FFmpeg is required for MP3 export. Install FFmpeg and add it to PATH.")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+             "-codec:a", "libmp3lame", "-b:a", "128k", str(output)],
+            cwd=source.parent, check=True, timeout=3600,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise HTTPException(422, f"Unable to export MP3: {exc}") from exc
+
 def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, voice_id: str | None = None, speed: float = 1.0):
     global _model
     speed = _validate_speed(speed)
@@ -289,8 +301,23 @@ def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_we
     # Keep this synchronous route as a limited preview; full chapters use /jobs.
     text = chapters[index]["text"][:1200]
     output = book_path(book_id) / f"chapter-{index}.wav"
+    mp3_output = book_path(book_id) / f"chapter-{index}.mp3"
     synthesize(text, output, exaggeration, cfg_weight, voice_id, speed)
-    return {"chapter": index, "generated_characters": len(text), "partial": len(chapters[index]["text"]) > 1200, "audio_url": f"/books/{book_id}/chapters/{index}/audio"}
+    export_mp3(output, mp3_output)
+    return {
+        "chapter": index,
+        "generated_characters": len(text),
+        "partial": len(chapters[index]["text"]) > 1200,
+        "audio_url": f"/books/{book_id}/chapters/{index}/audio",
+        "audio_mp3_url": f"/books/{book_id}/chapters/{index}/audio.mp3",
+    }
+
+@app.get("/books/{book_id}/chapters/{index}/audio.mp3")
+def chapter_audio_mp3(book_id: str, index: int):
+    path = book_path(book_id) / f"chapter-{index}.mp3"
+    if not path.exists():
+        raise HTTPException(404, "MP3 audio not generated")
+    return FileResponse(path, media_type="audio/mpeg", filename=f"chapter-{index}.mp3")
 
 @app.get("/books/{book_id}/chapters/{index}/audio")
 def chapter_audio(book_id: str, index: int):
@@ -318,6 +345,10 @@ def retry_generation_job(job_id: str):
 @app.get("/jobs/{job_id}/audio")
 def download_generated_audio(job_id: str):
     return FileResponse(job_queue.audio_path(job_id), media_type="audio/mpeg", filename="book2vox-chapter.mp3")
+
+@app.get("/jobs/{job_id}/audio-wav")
+def download_generated_audio_wav(job_id: str):
+    return FileResponse(job_queue.audio_wav_path(job_id), media_type="audio/wav", filename="book2vox-chapter.wav")
 
 @app.get("/books/{book_id}/jobs")
 def list_book_jobs(book_id: str):

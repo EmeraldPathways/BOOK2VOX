@@ -12,3 +12,7 @@ test("preview audio keeps the WAV download name", () => {
   assert.equal(audioDownloadName("wav"), "book2vox-preview.wav");
   assert.equal(audioDownloadLabel("wav"), "Download WAV");
 });
+
+test("chapter audio uses the chapter WAV download name", () => {
+  assert.equal(audioDownloadName("wav", "chapter"), "book2vox-chapter.wav");
+});

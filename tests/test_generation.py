@@ -62,6 +62,7 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
 
     job = jobs.get_job(job_id)
     output = book_dir / "jobs" / job_id / "chapter.mp3"
+    wav_output = book_dir / "jobs" / job_id / "chapter.wav"
     assert job["status"] == "completed"
     assert job["completed"] == len(parts)
     assert len(calls) == len(parts)
@@ -69,6 +70,9 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
     assert all(call[4] == 1.15 for call in calls)
     assert output.is_file()
     assert output.stat().st_size > 0
+    assert wav_output.is_file()
+    assert wav_output.stat().st_size > 0
+    assert Path(main.download_generated_audio_wav(job_id).path) == wav_output
 
 
 def test_job_request_persists_talking_speed(tmp_path, monkeypatch):

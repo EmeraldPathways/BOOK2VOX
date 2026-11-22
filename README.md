@@ -8,7 +8,7 @@ Local-first, cloud-ready audiobook generator with expressive narration.
 - Preview and generate full-chapter MP3 narration on NVIDIA CUDA using Chatterbox
 - Select a 3–30 second range from an MP3/WAV voice recording; the original is retained and the selected clip becomes the Chatterbox reference
 - Optional LM Studio narration analysis (never rewrites source text)
-- Download WAV previews and chapter audio
+- Download WAV previews plus MP3 and WAV chapter audio
 
 ## Requirements
 Windows 10/11, Python 3.11, Node.js LTS, FFmpeg, Calibre (for MOBI), an NVIDIA driver, and CUDA-compatible PyTorch. Install the CUDA build of PyTorch from https://pytorch.org/get-started/locally/ before installing Chatterbox.
