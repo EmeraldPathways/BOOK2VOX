@@ -5,7 +5,6 @@ import math
 import shutil
 import sys
 import struct
-import wave
 from pathlib import Path
 
 import pytest
@@ -13,6 +12,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api"))
 
 from app import jobs, main
+
+
+def write_float_wav(path: Path):
+    samples = b"".join(struct.pack("<f", 0.1 * math.sin(2 * math.pi * 440 * i / 24000)) for i in range(24000))
+    fmt = struct.pack("<HHIIHH", 3, 1, 24000, 96000, 4, 32)
+    path.write_bytes(
+        b"RIFF" + struct.pack("<I", 36 + len(samples)) + b"WAVE"
+        + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+        + b"data" + struct.pack("<I", len(samples)) + samples
+    )
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg is required for MP3 export")
@@ -50,11 +59,7 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
 
     def fake_synthesize(text, output, exaggeration, cfg_weight, selected_voice_id=None, speed=1.0):
         calls.append((text, exaggeration, cfg_weight, selected_voice_id, speed))
-        with wave.open(str(output), "wb") as audio:
-            audio.setnchannels(1)
-            audio.setsampwidth(2)
-            audio.setframerate(24000)
-            audio.writeframes(b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 24000))) for i in range(24000)))
+        write_float_wav(output)
 
     monkeypatch.setattr(main, "synthesize", fake_synthesize)
 
