@@ -9,6 +9,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api"))
 from app import main
 
 
+def test_narration_direction_parses_structured_lm_studio_response(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url):
+            calls.append(("get", url))
+            return FakeResponse({"data": [{"id": "text-embedding-nomic-embed-text-v1.5"}, {"id": "qwen/qwen3.5-9b"}]})
+
+        def post(self, url, json):
+            calls.append(("post", url, json))
+            return FakeResponse({"choices": [{"message": {"content": '{"guidance":"Build quiet tension and slow the pauses.","mood":"tense","exaggeration":0.9,"cfg_weight":0.35}'}}]})
+
+    monkeypatch.setattr(main.httpx, "Client", FakeClient)
+
+    direction = main.narration_direction("The door opened.")
+
+    assert direction.guidance == "Build quiet tension and slow the pauses."
+    assert direction.mood == "tense"
+    assert direction.exaggeration == 0.9
+    assert direction.cfg_weight == 0.35
+    assert calls[1][2]["model"] == "qwen/qwen3.5-9b"
+
+
+def test_apply_narration_direction_blends_with_manual_controls():
+    direction = main.NarrationDirection(exaggeration=0.9, cfg_weight=0.2)
+
+    exaggeration, cfg_weight = main.apply_narration_direction(0.5, 0.5, direction)
+
+    assert exaggeration == 0.64
+    assert cfg_weight == 0.395
+
+
 def test_synthesize_uses_voice_reference_and_emotion_controls(tmp_path, monkeypatch):
     calls = {"load": [], "generate": [], "save": []}
 

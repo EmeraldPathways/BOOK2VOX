@@ -38,6 +38,7 @@ def test_process_generates_every_segment_and_exports_mp3(tmp_path, monkeypatch):
     )
     (book_dir / "chapters.json").write_text(json.dumps([{"title": "Chapter 1", "text": chapter_text}]), encoding="utf-8")
     monkeypatch.setattr(main, "STORE", tmp_path)
+    monkeypatch.setattr(main, "narration_direction", lambda text: None, raising=False)
 
     with jobs.connect() as db:
         db.execute(

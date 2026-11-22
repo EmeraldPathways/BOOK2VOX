@@ -5,9 +5,10 @@ Local-first, cloud-ready audiobook generator with expressive narration.
 ## MVP
 - Upload EPUB, MOBI, DOCX, TXT, or text-based PDF
 - Extract and review chapters
+- Rename and delete books, and correct chapter text in the built-in editor
 - Preview and generate full-chapter MP3 narration on NVIDIA CUDA using Chatterbox
 - Select a 3–30 second range from an MP3/WAV voice recording; the original is retained and the selected clip becomes the Chatterbox reference
-- Optional LM Studio narration analysis (never rewrites source text)
+- Optional LM Studio narration analysis; structured mood guidance gently adjusts Chatterbox emotion controls without rewriting spoken text
 - Download WAV previews plus MP3 and WAV chapter audio
 
 ## Requirements

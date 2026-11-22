@@ -151,6 +151,8 @@ def process(job):
     parts = segment(chapters[job["chapter"]]["text"])
     folder = book_dir / "jobs" / job["id"]
     folder.mkdir(parents=True, exist_ok=True)
+    direction = _core().narration_direction(chapters[job["chapter"]]["text"][:4000])
+    exaggeration, cfg_weight = _core().apply_narration_direction(job["exaggeration"], job["cfg_weight"], direction)
     for index, text in enumerate(parts):
         if get_job(job["id"])["status"] != "running":
             return
@@ -158,7 +160,7 @@ def process(job):
         if not target.exists():
             tmp = folder / f"{index:05}.tmp.wav"
             with GPU_LOCK:
-                _core().synthesize(text, tmp, job["exaggeration"], job["cfg_weight"], job.get("voice_id"), job.get("speed", 1.0))
+                _core().synthesize(text, tmp, exaggeration, cfg_weight, job.get("voice_id"), job.get("speed", 1.0))
             tmp.replace(target)
         with connect() as db:
             db.execute("UPDATE jobs SET completed=?, updated_at=? WHERE id=? AND status='running'",

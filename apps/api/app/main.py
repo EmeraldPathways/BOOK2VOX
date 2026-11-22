@@ -190,12 +190,55 @@ async def upload_book(file: UploadFile = File(...)):
 def get_book(book_id: str):
     return {"id": book_id, **load_book(book_id)}
 
+class BookUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+class ChapterUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1)
+
+@app.patch("/books/{book_id}")
+def rename_book(book_id: str, request: BookUpdate):
+    path = book_path(book_id)
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(422, "Book title cannot be empty")
+    record = load_book(book_id)
+    record["title"] = title
+    (path / "book.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return {"id": book_id, **record}
+
+@app.delete("/books/{book_id}")
+def delete_book(book_id: str):
+    path = book_path(book_id)
+    shutil.rmtree(path)
+    return {"deleted": True, "id": book_id}
+
 @app.get("/books/{book_id}/chapters/{index}")
 def get_chapter(book_id: str, index: int):
     chapters = json.loads((book_path(book_id) / "chapters.json").read_text(encoding="utf-8"))
     if index < 0 or index >= len(chapters):
         raise HTTPException(404, "Chapter not found")
     return chapters[index]
+
+@app.put("/books/{book_id}/chapters/{index}")
+def update_chapter(book_id: str, index: int, request: ChapterUpdate):
+    path = book_path(book_id)
+    chapters_path = path / "chapters.json"
+    chapters = json.loads(chapters_path.read_text(encoding="utf-8"))
+    if index < 0 or index >= len(chapters):
+        raise HTTPException(404, "Chapter not found")
+    title = request.title.strip()
+    text = request.text.strip()
+    if not title or not text:
+        raise HTTPException(422, "Chapter title and text cannot be empty")
+    chapter = {"title": title, "text": text}
+    chapters[index] = chapter
+    chapters_path.write_text(json.dumps(chapters, ensure_ascii=False), encoding="utf-8")
+    record = load_book(book_id)
+    record["chapters"][index] = {"index": index, "title": title, "characters": len(text)}
+    (path / "book.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return {"index": index, **chapter}
 
 class PreviewRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
@@ -259,34 +302,99 @@ def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, 
 @app.post("/previews")
 def preview(req: PreviewRequest):
     path = STORE / f"preview-{uuid.uuid4().hex}.wav"
-    synthesize(req.text, path, req.exaggeration, req.cfg_weight, req.voice_id, req.speed)
+    direction = narration_direction(req.text)
+    exaggeration, cfg_weight = apply_narration_direction(req.exaggeration, req.cfg_weight, direction)
+    synthesize(req.text, path, exaggeration, cfg_weight, req.voice_id, req.speed)
     return FileResponse(path, media_type="audio/wav", filename="book2vox-preview.wav")
 
 class AnalyseRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
-@app.post("/narration/analyse")
-async def analyse(req: AnalyseRequest):
+class NarrationDirection(BaseModel):
+    guidance: str = ""
+    mood: str = "neutral"
+    exaggeration: float | None = Field(default=None, ge=0, le=1)
+    cfg_weight: float | None = Field(default=None, ge=0, le=1)
+
+def _select_lm_model(available: list[dict]) -> str:
+    preferred = os.getenv("LM_STUDIO_MODEL", "qwen/qwen3.5-9b")
+    ids = [str(item.get("id", "")) for item in available]
+    if preferred in ids:
+        return preferred
+    for model_id in ids:
+        if "embed" not in model_id.lower():
+            return model_id
+    raise RuntimeError("Load a chat model in LM Studio")
+
+def _control_value(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(max(0.0, min(1.0, number)), 3)
+
+def _parse_narration_direction(content: str) -> NarrationDirection:
+    text = content.strip()
+    payload: dict[str, Any] | None = None
+    try:
+        decoded = json.loads(text)
+        if isinstance(decoded, dict):
+            payload = decoded
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                decoded = json.loads(match.group(0))
+                if isinstance(decoded, dict):
+                    payload = decoded
+            except json.JSONDecodeError:
+                pass
+    if payload is None:
+        return NarrationDirection(guidance=text)
+    return NarrationDirection(
+        guidance=str(payload.get("guidance") or payload.get("direction") or text).strip(),
+        mood=str(payload.get("mood") or "neutral").strip(),
+        exaggeration=_control_value(payload.get("exaggeration")),
+        cfg_weight=_control_value(payload.get("cfg_weight")),
+    )
+
+def narration_direction(text: str, strict: bool = False) -> NarrationDirection | None:
     base = os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1").rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=90) as client:
-            models = await client.get(f"{base}/models")
+        with httpx.Client(timeout=90) as client:
+            models = client.get(f"{base}/models")
             models.raise_for_status()
             available = models.json().get("data", [])
-            if not available:
-                raise HTTPException(503, "Load a chat model in LM Studio")
-            response = await client.post(f"{base}/chat/completions", json={
-                "model": available[0]["id"],
+            model = _select_lm_model(available)
+            response = client.post(f"{base}/chat/completions", json={
+                "model": model,
                 "temperature": 0.2,
                 "messages": [
-                    {"role": "system", "content": "You are an audiobook narration director. Do not rewrite or repeat the text. Return concise guidance about mood, pacing, pauses and dialogue delivery."},
-                    {"role": "user", "content": req.text},
+                    {"role": "system", "content": "You are an audiobook narration director. Analyze the passage and return JSON only with these keys: guidance (one concise actionable sentence), mood (one word), exaggeration (number from 0 to 1), cfg_weight (number from 0 to 1). Do not rewrite or repeat the passage."},
+                    {"role": "user", "content": text[:4000]},
                 ],
             })
             response.raise_for_status()
-            return {"guidance": response.json()["choices"][0]["message"]["content"]}
-    except httpx.HTTPError as exc:
-        raise HTTPException(503, f"LM Studio unavailable: {exc}") from exc
+            content = response.json()["choices"][0]["message"]["content"]
+            return _parse_narration_direction(str(content))
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        if strict:
+            raise HTTPException(503, f"LM Studio unavailable: {exc}") from exc
+        return None
+
+def apply_narration_direction(exaggeration: float, cfg_weight: float, direction: NarrationDirection | None) -> tuple[float, float]:
+    if direction is None:
+        return exaggeration, cfg_weight
+    blend = 0.35
+    guided_exaggeration = exaggeration if direction.exaggeration is None else exaggeration + (direction.exaggeration - exaggeration) * blend
+    guided_cfg_weight = cfg_weight if direction.cfg_weight is None else cfg_weight + (direction.cfg_weight - cfg_weight) * blend
+    return round(guided_exaggeration, 3), round(guided_cfg_weight, 3)
+
+@app.post("/narration/analyse")
+def analyse(req: AnalyseRequest):
+    return narration_direction(req.text, strict=True).model_dump()
 
 @app.post("/books/{book_id}/chapters/{index}/generate")
 def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_weight: float = 0.5, voice_id: str | None = None, speed: float = 1.0):
@@ -302,6 +410,8 @@ def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_we
     text = chapters[index]["text"][:1200]
     output = book_path(book_id) / f"chapter-{index}.wav"
     mp3_output = book_path(book_id) / f"chapter-{index}.mp3"
+    direction = narration_direction(text)
+    exaggeration, cfg_weight = apply_narration_direction(exaggeration, cfg_weight, direction)
     synthesize(text, output, exaggeration, cfg_weight, voice_id, speed)
     export_mp3(output, mp3_output)
     return {

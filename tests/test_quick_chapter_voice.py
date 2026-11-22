@@ -21,6 +21,7 @@ def test_quick_chapter_passes_selected_voice_to_synthesis(tmp_path, monkeypatch)
     (book_dir / "book.json").write_text(json.dumps({"title": "Test", "chapters": []}), encoding="utf-8")
     (book_dir / "chapters.json").write_text(json.dumps([{"title": "Chapter 1", "text": "A short chapter."}]), encoding="utf-8")
     monkeypatch.setattr(main, "STORE", tmp_path)
+    monkeypatch.setattr(main, "narration_direction", lambda text: None, raising=False)
     monkeypatch.setattr(main.voice_library, "reference_path", lambda selected: "reference.wav")
 
     calls = []
@@ -48,6 +49,7 @@ def test_quick_chapter_exports_wav_and_mp3(tmp_path, monkeypatch):
     (book_dir / "book.json").write_text(json.dumps({"title": "Test", "chapters": []}), encoding="utf-8")
     (book_dir / "chapters.json").write_text(json.dumps([{"title": "Chapter 1", "text": "A short chapter."}]), encoding="utf-8")
     monkeypatch.setattr(main, "STORE", tmp_path)
+    monkeypatch.setattr(main, "narration_direction", lambda text: None, raising=False)
 
     def fake_synthesize(text, output, exaggeration, cfg_weight, selected_voice_id=None, speed=1.0):
         with wave.open(str(output), "wb") as audio:
