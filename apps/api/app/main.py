@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 from bs4 import BeautifulSoup
@@ -123,6 +125,99 @@ def _extract_mobi(data: bytes) -> list[dict]:
             raise HTTPException(422, f"Unable to read converted MOBI: {exc}") from exc
 
 
+def _epub_path(value: str) -> str:
+    path = unquote(value.split("#", 1)[0]).replace("\\", "/")
+    return posixpath.normpath(path).lstrip("/") if path else ""
+
+
+def _epub_toc_titles(book: Any) -> dict[str, list[str]]:
+    titles: dict[str, list[str]] = {}
+
+    def visit(entry: Any) -> None:
+        if isinstance(entry, (list, tuple)):
+            for child in entry:
+                visit(child)
+            return
+        href = getattr(entry, "href", None)
+        title = " ".join(str(getattr(entry, "title", "")).split())
+        path = _epub_path(str(href or ""))
+        if not path or not title:
+            return
+        keys = [path]
+        basename = posixpath.basename(path)
+        if basename and basename != path:
+            keys.append(basename)
+        for key in keys:
+            if title not in titles.setdefault(key, []):
+                titles[key].append(title)
+
+    visit(getattr(book, "toc", []))
+    return titles
+
+
+def _epub_item_toc_titles(item: Any, toc_titles: dict[str, list[str]]) -> list[str]:
+    path = _epub_path(str(getattr(item, "file_name", "")))
+    if not path:
+        return []
+    titles = list(toc_titles.get(path, []))
+    basename = posixpath.basename(path)
+    if basename != path:
+        for title in toc_titles.get(basename, []):
+            if title not in titles:
+                titles.append(title)
+    return titles
+
+
+def _remove_epub_navigation(soup: BeautifulSoup, text: str) -> bool:
+    links = soup.find_all("a", href=True)
+    lowered = text.casefold()
+    looks_like_navigation = len(links) >= 4 and (
+        "table of contents" in lowered
+        or re.search(r"(?im)^\s*contents\s*$", text)
+        or (len(links) >= 10 and len(text) < 5000)
+    )
+    if not looks_like_navigation:
+        return False
+
+    blocks = []
+    seen: set[int] = set()
+    for link in links:
+        block = link.find_parent(["li", "p", "blockquote"]) or link
+        if id(block) not in seen:
+            blocks.append(block)
+            seen.add(id(block))
+    for block in blocks:
+        block.decompose()
+    for tag in soup.find_all(["ul", "ol"]):
+        if not tag.get_text(" ", strip=True):
+            tag.decompose()
+    for tag in soup.find_all(["p", "div", "h1", "h2", "h3", "h4"]):
+        if re.fullmatch(r"(?:table\s+of\s+)?contents", tag.get_text(" ", strip=True), re.IGNORECASE):
+            tag.decompose()
+    return True
+
+
+def _epub_title(soup: BeautifulSoup, text: str, toc_titles: list[str], fallback: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for toc_title in toc_titles:
+        if toc_title.isdigit():
+            continue
+        if any(line.casefold() == toc_title.casefold() or line.casefold().startswith(f"{toc_title.casefold()} ") for line in lines[:20]):
+            return toc_title
+    if lines and re.match(r"(?i)^(?:part|chapter|book|volume)\b", lines[0]):
+        return lines[0]
+    heading = soup.find(["h1", "h2", "h3"])
+    if heading:
+        title = heading.get_text(" ", strip=True)
+        if title and title.casefold() not in {"unknown", "untitled"}:
+            return title
+    if toc_titles:
+        return toc_titles[0]
+    if lines and len(lines[0]) <= 120 and len(lines[0].split()) <= 14 and not re.search(r"[.!?]$", lines[0]):
+        return lines[0]
+    return fallback
+
+
 def extract(data: bytes, suffix: str) -> list[dict]:
     suffix = suffix.lower()
     if suffix == ".txt":
@@ -134,18 +229,22 @@ def extract(data: bytes, suffix: str) -> list[dict]:
     if suffix == ".epub":
         book = epub.read_epub(io.BytesIO(data))
         items = {item.id: item for item in book.get_items() if item.get_type() == ITEM_DOCUMENT}
+        toc_titles = _epub_toc_titles(book)
         chapters = []
         for entry in book.spine:
             item = items.get(entry[0])
             if item is None:
                 continue
             soup = BeautifulSoup(item.get_content(), "html.parser")
-            for tag in soup(["script", "style", "nav"]):
+            for tag in soup(["script", "style", "nav", "title"]):
                 tag.decompose()
             text = soup.get_text("\n", strip=True)
+            navigation_removed = _remove_epub_navigation(soup, text)
+            if navigation_removed:
+                text = soup.get_text("\n", strip=True)
             if len(text) >= 40:
-                heading = soup.find(["h1", "h2", "h3"])
-                chapters.append({"title": heading.get_text(" ", strip=True) if heading else f"Section {len(chapters)+1}", "text": text})
+                titles = _epub_item_toc_titles(item, toc_titles)
+                chapters.append({"title": _epub_title(soup, text, titles, f"Section {len(chapters)+1}"), "text": text})
         return chapters
     if suffix == ".pdf":
         import fitz
