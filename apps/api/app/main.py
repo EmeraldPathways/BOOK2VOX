@@ -403,7 +403,8 @@ def preview(req: PreviewRequest):
     path = STORE / f"preview-{uuid.uuid4().hex}.wav"
     direction = narration_direction(req.text)
     exaggeration, cfg_weight = apply_narration_direction(req.exaggeration, req.cfg_weight, direction)
-    synthesize(req.text, path, exaggeration, cfg_weight, req.voice_id, req.speed)
+    with job_queue.GPU_LOCK:
+        synthesize(req.text, path, exaggeration, cfg_weight, req.voice_id, req.speed)
     return FileResponse(path, media_type="audio/wav", filename="book2vox-preview.wav")
 
 class AnalyseRequest(BaseModel):
@@ -538,7 +539,8 @@ def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_we
     mp3_output = book_path(book_id) / f"chapter-{index}.mp3"
     direction = narration_direction(text)
     exaggeration, cfg_weight = apply_narration_direction(exaggeration, cfg_weight, direction)
-    synthesize(text, output, exaggeration, cfg_weight, voice_id, speed)
+    with job_queue.GPU_LOCK:
+        synthesize(text, output, exaggeration, cfg_weight, voice_id, speed)
     export_mp3(output, mp3_output)
     return {
         "chapter": index,
