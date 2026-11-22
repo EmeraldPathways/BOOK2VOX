@@ -8,7 +8,7 @@ Local-first, cloud-ready audiobook generator with expressive narration.
 - Rename and delete books, and correct chapter text in the built-in editor
 - Preview and generate full-chapter MP3 narration on NVIDIA CUDA using Chatterbox
 - Select a 3–30 second range from an MP3/WAV voice recording; the original is retained and the selected clip becomes the Chatterbox reference
-- Optional LM Studio narration analysis; structured mood guidance gently adjusts Chatterbox emotion controls without rewriting spoken text
+- Optional LM Studio narration analysis; disabled by default so it cannot compete with GPU voice generation
 - Download WAV previews plus MP3 and WAV chapter audio
 
 ## Requirements
@@ -20,7 +20,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r apps/api/requirements.txt
 # Install the CUDA PyTorch command selected at https://pytorch.org/get-started/locally/
-pip install chatterbox-tts
+pip install --upgrade chatterbox-tts
 uvicorn app.main:app --app-dir apps/api --reload --port 8000
 ```
 
@@ -35,6 +35,15 @@ npm run dev
 Open http://localhost:3000. API runs at http://127.0.0.1:8000.
 
 The first Chatterbox synthesis downloads model weights. Full chapters run through the local background queue and export MP3 with FFmpeg. The API must remain running while a job is generating. The talking-speed control (0.75×–1.25×) is carried into previews, quick excerpts, and full-chapter jobs.
+
+The API uses Chatterbox-Turbo by default for lower GPU and VRAM use. Set these before starting the API:
+
+```powershell
+$env:BOOK2VOX_TTS_ENGINE = "turbo"
+$env:BOOK2VOX_LM_GUIDANCE = "false"
+```
+
+Turbo supports the saved voice reference and talking speed. The upstream Turbo model does not implement the classic Chatterbox `exaggeration` and `cfg_weight` controls; use `$env:BOOK2VOX_TTS_ENGINE = "classic"` when those exact expression controls are required. LM Studio can be left installed but should remain unloaded or stopped during Turbo generation to keep VRAM free. Set `$env:BOOK2VOX_LM_GUIDANCE = "true"` only when you want its optional automatic numeric guidance.
 
 For a deployed frontend, copy `apps/web/.env.example` to `.env.local` for local work or set `NEXT_PUBLIC_API_URL` in Vercel to the public HTTPS URL of a separately hosted FastAPI backend. Set the backend's `CORS_ORIGINS` to the Vercel origin. Vercel hosts the Next.js frontend only; Chatterbox, CUDA, FFmpeg, local storage, and the generation worker cannot run inside this Vercel deployment.
 

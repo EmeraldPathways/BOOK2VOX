@@ -255,7 +255,12 @@ def extract(data: bytes, suffix: str) -> list[dict]:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "lm_studio": os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1")}
+    return {
+        "status": "ok",
+        "lm_studio": os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1"),
+        "lm_guidance": lm_guidance_enabled(),
+        "tts_engine": tts_engine(),
+    }
 
 @app.get("/books")
 def books():
@@ -347,6 +352,22 @@ class PreviewRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.75, le=1.25)
 
 _model: Any = None
+_model_engine: str | None = None
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+def lm_guidance_enabled() -> bool:
+    return _env_flag("BOOK2VOX_LM_GUIDANCE", False)
+
+def tts_engine() -> str:
+    engine = os.getenv("BOOK2VOX_TTS_ENGINE", "turbo").strip().lower()
+    if engine not in {"turbo", "classic"}:
+        raise HTTPException(503, "BOOK2VOX_TTS_ENGINE must be turbo or classic")
+    return engine
 
 def _validate_speed(speed: float) -> float:
     if not math.isfinite(speed) or not 0.75 <= speed <= 1.25:
@@ -366,19 +387,37 @@ def export_mp3(source: Path, output: Path):
         raise HTTPException(422, f"Unable to export MP3: {exc}") from exc
 
 def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, voice_id: str | None = None, speed: float = 1.0):
-    global _model
+    global _model, _model_engine
     speed = _validate_speed(speed)
     try:
         import torch
         import torchaudio
-        from chatterbox.tts import ChatterboxTTS
     except ImportError as exc:
         raise HTTPException(503, "Install CUDA PyTorch, torchaudio and chatterbox-tts to enable narration") from exc
-    if _model is None:
-        _model = ChatterboxTTS.from_pretrained(device="cuda" if torch.cuda.is_available() else "cpu")
-    kwargs = {"exaggeration": exaggeration, "cfg_weight": cfg_weight}
+    engine = tts_engine()
+    if _model is None or _model_engine != engine:
+        try:
+            if engine == "turbo":
+                from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+                model_class = ChatterboxTurboTTS
+            else:
+                from chatterbox.tts import ChatterboxTTS
+
+                model_class = ChatterboxTTS
+        except ImportError as exc:
+            if engine == "turbo":
+                message = "Chatterbox Turbo is unavailable. Upgrade chatterbox-tts or set BOOK2VOX_TTS_ENGINE=classic."
+            else:
+                message = "Install chatterbox-tts to enable classic Chatterbox narration."
+            raise HTTPException(503, message) from exc
+        _model = model_class.from_pretrained(device="cuda" if torch.cuda.is_available() else "cpu")
+        _model_engine = engine
+    kwargs = {}
     if voice_id:
         kwargs["audio_prompt_path"] = voice_library.reference_path(voice_id)
+    if engine == "classic":
+        kwargs.update(exaggeration=exaggeration, cfg_weight=cfg_weight)
     audio = _model.generate(text, **kwargs)
     if speed == 1.0:
         torchaudio.save(str(output), audio.cpu(), _model.sr)
@@ -401,8 +440,7 @@ def synthesize(text: str, output: Path, exaggeration: float, cfg_weight: float, 
 @app.post("/previews")
 def preview(req: PreviewRequest):
     path = STORE / f"preview-{uuid.uuid4().hex}.wav"
-    direction = narration_direction(req.text)
-    exaggeration, cfg_weight = apply_narration_direction(req.exaggeration, req.cfg_weight, direction)
+    exaggeration, cfg_weight = narration_controls(req.text, req.exaggeration, req.cfg_weight)
     with job_queue.GPU_LOCK:
         synthesize(req.text, path, exaggeration, cfg_weight, req.voice_id, req.speed)
     return FileResponse(path, media_type="audio/wav", filename="book2vox-preview.wav")
@@ -519,6 +557,11 @@ def apply_narration_direction(exaggeration: float, cfg_weight: float, direction:
     guided_cfg_weight = cfg_weight if direction.cfg_weight is None else cfg_weight + (direction.cfg_weight - cfg_weight) * blend
     return round(guided_exaggeration, 3), round(guided_cfg_weight, 3)
 
+def narration_controls(text: str, exaggeration: float, cfg_weight: float) -> tuple[float, float]:
+    if not lm_guidance_enabled():
+        return exaggeration, cfg_weight
+    return apply_narration_direction(exaggeration, cfg_weight, narration_direction(text))
+
 @app.post("/narration/analyse")
 def analyse(req: AnalyseRequest):
     return narration_direction(req.text, strict=True).model_dump()
@@ -537,8 +580,7 @@ def generate_chapter(book_id: str, index: int, exaggeration: float = 0.5, cfg_we
     text = chapters[index]["text"][:1200]
     output = book_path(book_id) / f"chapter-{index}.wav"
     mp3_output = book_path(book_id) / f"chapter-{index}.mp3"
-    direction = narration_direction(text)
-    exaggeration, cfg_weight = apply_narration_direction(exaggeration, cfg_weight, direction)
+    exaggeration, cfg_weight = narration_controls(text, exaggeration, cfg_weight)
     with job_queue.GPU_LOCK:
         synthesize(text, output, exaggeration, cfg_weight, voice_id, speed)
     export_mp3(output, mp3_output)

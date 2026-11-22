@@ -151,8 +151,9 @@ def process(job):
     parts = segment(chapters[job["chapter"]]["text"])
     folder = book_dir / "jobs" / job["id"]
     folder.mkdir(parents=True, exist_ok=True)
-    direction = _core().narration_direction(chapters[job["chapter"]]["text"][:4000])
-    exaggeration, cfg_weight = _core().apply_narration_direction(job["exaggeration"], job["cfg_weight"], direction)
+    exaggeration, cfg_weight = _core().narration_controls(
+        chapters[job["chapter"]]["text"][:4000], job["exaggeration"], job["cfg_weight"]
+    )
     for index, text in enumerate(parts):
         if get_job(job["id"])["status"] != "running":
             return

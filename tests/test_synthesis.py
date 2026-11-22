@@ -110,6 +110,72 @@ def test_apply_narration_direction_blends_with_manual_controls():
     assert cfg_weight == 0.395
 
 
+def test_narration_controls_skip_lm_guidance_by_default(monkeypatch):
+    monkeypatch.delenv("BOOK2VOX_LM_GUIDANCE", raising=False)
+
+    def fail_if_called(text):
+        raise AssertionError("LM Studio should be optional for generation")
+
+    monkeypatch.setattr(main, "narration_direction", fail_if_called)
+
+    assert main.narration_controls("A short line.", 0.8, 0.5) == (0.8, 0.5)
+
+
+def test_narration_controls_use_lm_guidance_when_enabled(monkeypatch):
+    monkeypatch.setenv("BOOK2VOX_LM_GUIDANCE", "true")
+    monkeypatch.setattr(
+        main,
+        "narration_direction",
+        lambda text: main.NarrationDirection(exaggeration=0.9, cfg_weight=0.2),
+    )
+
+    assert main.narration_controls("A short line.", 0.5, 0.5) == (0.64, 0.395)
+
+
+def test_synthesize_defaults_to_turbo_with_reference_voice(tmp_path, monkeypatch):
+    calls = {"load": [], "generate": [], "save": []}
+
+    class FakeAudio:
+        def cpu(self):
+            return self
+
+    class FakeTurboModel:
+        sr = 24000
+
+        @classmethod
+        def from_pretrained(cls, device):
+            calls["load"].append(device)
+            return cls()
+
+        def generate(self, text, **kwargs):
+            calls["generate"].append((text, kwargs))
+            return FakeAudio()
+
+    torch_module = types.ModuleType("torch")
+    torch_module.cuda = types.SimpleNamespace(is_available=lambda: True)
+    torchaudio_module = types.ModuleType("torchaudio")
+    torchaudio_module.save = lambda path, audio, sample_rate: calls["save"].append((path, audio, sample_rate))
+    chatterbox_module = types.ModuleType("chatterbox")
+    chatterbox_turbo_module = types.ModuleType("chatterbox.tts_turbo")
+    chatterbox_turbo_module.ChatterboxTurboTTS = FakeTurboModel
+    chatterbox_module.tts_turbo = chatterbox_turbo_module
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+    monkeypatch.setitem(sys.modules, "torchaudio", torchaudio_module)
+    monkeypatch.setitem(sys.modules, "chatterbox", chatterbox_module)
+    monkeypatch.setitem(sys.modules, "chatterbox.tts_turbo", chatterbox_turbo_module)
+    monkeypatch.delenv("BOOK2VOX_TTS_ENGINE", raising=False)
+    monkeypatch.setattr(main.voice_library, "reference_path", lambda voice_id: "reference.wav")
+    monkeypatch.setattr(main, "_model", None)
+    monkeypatch.setattr(main, "_model_engine", None, raising=False)
+
+    output = tmp_path / "turbo.wav"
+    main.synthesize("A short line.", output, 0.8, 0.3, "voice-id")
+
+    assert calls["load"] == ["cuda"]
+    assert calls["generate"] == [("A short line.", {"audio_prompt_path": "reference.wav"})]
+    assert len(calls["save"]) == 1
+
+
 def test_synthesize_uses_voice_reference_and_emotion_controls(tmp_path, monkeypatch):
     calls = {"load": [], "generate": [], "save": []}
 
@@ -141,8 +207,10 @@ def test_synthesize_uses_voice_reference_and_emotion_controls(tmp_path, monkeypa
     monkeypatch.setitem(sys.modules, "torchaudio", torchaudio_module)
     monkeypatch.setitem(sys.modules, "chatterbox", chatterbox_module)
     monkeypatch.setitem(sys.modules, "chatterbox.tts", chatterbox_tts_module)
+    monkeypatch.setenv("BOOK2VOX_TTS_ENGINE", "classic")
     monkeypatch.setattr(main.voice_library, "reference_path", lambda voice_id: "reference.wav")
     monkeypatch.setattr(main, "_model", None)
+    monkeypatch.setattr(main, "_model_engine", None, raising=False)
 
     output = tmp_path / "preview.wav"
     main.synthesize("A dramatic line.", output, 0.8, 0.3, "voice-id")
@@ -193,7 +261,9 @@ def test_synthesize_applies_pitch_preserving_speed(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "torchaudio", torchaudio_module)
     monkeypatch.setitem(sys.modules, "chatterbox", chatterbox_module)
     monkeypatch.setitem(sys.modules, "chatterbox.tts", chatterbox_tts_module)
+    monkeypatch.setenv("BOOK2VOX_TTS_ENGINE", "classic")
     monkeypatch.setattr(main, "_model", None)
+    monkeypatch.setattr(main, "_model_engine", None, raising=False)
     monkeypatch.setattr(main.shutil, "which", lambda name: "ffmpeg.exe" if name == "ffmpeg" else None)
 
     def fake_run(args, **kwargs):
