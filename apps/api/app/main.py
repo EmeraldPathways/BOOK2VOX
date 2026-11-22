@@ -459,24 +459,51 @@ def _parse_narration_direction(content: str) -> NarrationDirection:
         cfg_weight=_control_value(payload.get("cfg_weight")),
     )
 
+def _lm_studio_native_chat_url(base: str) -> str:
+    root = base[:-3].rstrip("/") if base.endswith("/v1") else base
+    return f"{root}/api/v1/chat"
+
 def narration_direction(text: str, strict: bool = False) -> NarrationDirection | None:
     base = os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1").rstrip("/")
     try:
-        with httpx.Client(timeout=90) as client:
+        with httpx.Client(timeout=45) as client:
             models = client.get(f"{base}/models")
             models.raise_for_status()
             available = models.json().get("data", [])
             model = _select_lm_model(available)
-            response = client.post(f"{base}/chat/completions", json={
+            instruction = "You are an audiobook narration director. Return JSON only with these keys: guidance (one concise actionable sentence), mood (one word), exaggeration (number from 0 to 1), cfg_weight (number from 0 to 1). Do not rewrite or repeat the passage."
+            native_response = client.post(_lm_studio_native_chat_url(base), json={
                 "model": model,
+                "system_prompt": instruction,
+                "input": text[:4000],
                 "temperature": 0.2,
-                "messages": [
-                    {"role": "system", "content": "You are an audiobook narration director. Analyze the passage and return JSON only with these keys: guidance (one concise actionable sentence), mood (one word), exaggeration (number from 0 to 1), cfg_weight (number from 0 to 1). Do not rewrite or repeat the passage."},
-                    {"role": "user", "content": text[:4000]},
-                ],
+                "max_output_tokens": 128,
+                "reasoning": "off",
+                "store": False,
             })
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            native_status = getattr(native_response, "status_code", 200)
+            content = ""
+            if native_status not in {404, 405}:
+                native_response.raise_for_status()
+                native_payload = native_response.json()
+                native_output = native_payload.get("output", []) if isinstance(native_payload, dict) else []
+                content = "\n".join(
+                    str(item.get("content", ""))
+                    for item in native_output
+                    if isinstance(item, dict) and item.get("type") == "message"
+                ).strip()
+            if not content:
+                response = client.post(f"{base}/chat/completions", json={
+                    "model": model,
+                    "temperature": 0.2,
+                    "max_tokens": 128,
+                    "messages": [
+                        {"role": "system", "content": instruction},
+                        {"role": "user", "content": text[:4000]},
+                    ],
+                })
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
             return _parse_narration_direction(str(content))
     except (httpx.HTTPError, KeyError, TypeError, ValueError, RuntimeError) as exc:
         if strict:

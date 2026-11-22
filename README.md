@@ -45,7 +45,7 @@ Choose an MP3, WAV, M4A, FLAC, or OGG recording up to 30 MB, then use the wavefo
 ## LM Studio
 Enable LM Studio's local API server on http://127.0.0.1:1234 and load an instruct model. For an RTX 3060, start with the current Qwen3 8B Instruct GGUF in Q4_K_M quantization if it is available in the LM Studio catalog; use a Qwen2.5 3B Instruct Q4_K_M model if memory is tight. Use an 8k–16k context, temperature around 0.2, and keep responses short (about 256 tokens) because the endpoint only needs mood, pacing, pause, and dialogue-delivery guidance.
 
-The optional `/narration/analyse` endpoint uses LM Studio's OpenAI-compatible `/v1/models` and `/v1/chat/completions` endpoints. Start the server from LM Studio's Developer tab, load the model first, and leave the server on port 1234. It does not change the book text.
+The optional `/narration/analyse` endpoint uses LM Studio's `/v1/models` endpoint and prefers the native `/api/v1/chat` endpoint with reasoning disabled and a short output limit; it falls back to `/v1/chat/completions` for older LM Studio versions. Start the server from LM Studio's Developer tab, load the model first, and leave the server on port 1234. It does not change the book text.
 
 ## Verification
 

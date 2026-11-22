@@ -51,6 +51,56 @@ def test_narration_direction_parses_structured_lm_studio_response(monkeypatch):
     assert calls[1][2]["model"] == "qwen/qwen3.5-9b"
 
 
+def test_narration_direction_uses_lm_studio_native_non_thinking_chat(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url):
+            return FakeResponse({"data": [{"id": "qwen/qwen3.5-9b"}]})
+
+        def post(self, url, json):
+            calls.append((url, json))
+            return FakeResponse({"output": [{
+                "type": "message",
+                "content": '{"guidance":"Keep the delivery restrained.","mood":"calm","exaggeration":0.4,"cfg_weight":0.5}',
+            }]})
+
+    monkeypatch.setattr(main.httpx, "Client", FakeClient)
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1")
+
+    direction = main.narration_direction("The door opened slowly.")
+
+    assert direction.guidance == "Keep the delivery restrained."
+    assert calls == [("http://127.0.0.1:1234/api/v1/chat", {
+        "model": "qwen/qwen3.5-9b",
+        "system_prompt": "You are an audiobook narration director. Return JSON only with these keys: guidance (one concise actionable sentence), mood (one word), exaggeration (number from 0 to 1), cfg_weight (number from 0 to 1). Do not rewrite or repeat the passage.",
+        "input": "The door opened slowly.",
+        "temperature": 0.2,
+        "max_output_tokens": 128,
+        "reasoning": "off",
+        "store": False,
+    })]
+
+
 def test_apply_narration_direction_blends_with_manual_controls():
     direction = main.NarrationDirection(exaggeration=0.9, cfg_weight=0.2)
 
